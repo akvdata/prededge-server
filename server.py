@@ -248,14 +248,13 @@ async def fetch_polymarket():
     now = time.time()
     if now - poly_ts < 60 and poly_cache:
         return poly_cache
-queries = [
+    queries = [
                "fed", "inflation", "recession", "bitcoin", "nvidia",
                "interest rate", "GDP", "tariff", "oil", "gold",
                "S&P", "nasdaq", "semiconductor", "quantum",
                "earnings", "unemployment", "treasury", "AI",
                "crypto", "trade", "dollar", "bond",
                ]
-
     results = []
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         for q in queries:

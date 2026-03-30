@@ -153,6 +153,92 @@ async def fetch_all_prices():
         logger.error(f"Price fetch error: {e}")
     return price_cache
 
+
+# ── Financial Inclusion Whitelist (from ETF prediction market project) ──
+FINANCIAL_KEYWORDS = {
+    # Central banks & monetary policy
+    "fed", "federal reserve", "fomc", "rate cut", "rate hike", "interest rate",
+    "monetary policy", "quantitative", "tightening", "easing", "dovish", "hawkish",
+    "ecb", "bank of england", "boe", "boj", "central bank",
+    # Inflation & prices
+    "inflation", "cpi", "pce", "deflation", "stagflation", "consumer price",
+    # Growth & recession
+    "recession", "gdp", "economic growth", "soft landing", "hard landing",
+    "unemployment", "jobs report", "nonfarm", "payroll",
+    # Fiscal & government
+    "tariff", "trade war", "sanctions", "debt ceiling", "government shutdown",
+    "fiscal", "deficit", "stimulus",
+    # Commodities
+    "oil", "crude", "brent", "wti", "opec", "natural gas",
+    "gold", "silver", "copper", "commodity",
+    # Credit & fixed income
+    "default", "credit spread", "treasury", "bond", "yield", "sovereign debt",
+    # Equities & indices
+    "s&p 500", "s&p500", "nasdaq", "dow jones", "stock market", "bear market",
+    "bull market", "correction", "earnings",
+    # Tech & AI
+    "nvidia", "nvda", "semiconductor", "chip", "export ban", "export restriction",
+    "ai regulation", "artificial intelligence", "quantum computing", "quantum",
+    "openai", "chatgpt", "tech regulation", "antitrust",
+    # Sector
+    "fda", "drug approval", "biotech", "energy", "renewable", "nuclear", "solar",
+    "bank failure", "banking crisis", "financial crisis",
+    # Crypto (financial relevance)
+    "bitcoin", "ethereum", "crypto regulation", "btc",
+    # Regional economics
+    "china gdp", "eurozone", "emerging market", "dollar", "euro", "sterling", "yen",
+    # Company-specific
+    "apple", "microsoft", "google", "amazon", "meta", "tesla",
+    "tsmc", "amd", "broadcom", "intel",
+}
+
+# Relevance categories — mapped from keywords to stock-relevant tags
+RELEVANCE_MAP = [
+    (["fed", "fomc", "rate cut", "rate hike", "interest rate", "federal reserve", "monetary policy", "dovish", "hawkish", "ecb", "bank of england", "boe", "central bank"], "RATES", "green"),
+    (["recession", "soft landing", "hard landing", "economic growth"], "RECESSION RISK", "amber"),
+    (["nvidia", "nvda"], "NVDA DIRECT", "green"),
+    (["semiconductor", "chip", "export ban", "export restriction", "tsmc", "amd", "broadcom", "intel"], "SEMIS", "green"),
+    (["bitcoin", "btc", "ethereum", "crypto regulation"], "CRYPTO", "amber"),
+    (["inflation", "cpi", "pce", "deflation", "stagflation", "consumer price"], "INFLATION", "green"),
+    (["artificial intelligence", "ai regulation", "openai", "chatgpt", "quantum computing", "quantum"], "AI / QUANTUM", "green"),
+    (["gdp", "unemployment", "jobs report", "nonfarm", "payroll"], "MACRO DATA", "green"),
+    (["tariff", "trade war", "sanctions"], "TRADE RISK", "red"),
+    (["oil", "crude", "brent", "wti", "opec", "natural gas", "gold", "silver", "copper", "commodity"], "COMMODITIES", "amber"),
+    (["s&p 500", "s&p500", "nasdaq", "dow jones", "stock market", "bear market", "bull market", "correction"], "INDEX", "green"),
+    (["treasury", "bond", "yield", "sovereign debt", "credit spread", "default"], "FIXED INCOME", "amber"),
+    (["debt ceiling", "government shutdown", "fiscal", "deficit", "stimulus"], "FISCAL POLICY", "amber"),
+    (["apple", "microsoft", "google", "amazon", "meta", "tesla"], "BIG TECH", "green"),
+    (["fda", "drug approval", "biotech"], "BIOTECH", "amber"),
+    (["energy", "renewable", "nuclear", "solar"], "ENERGY", "amber"),
+    (["bank failure", "banking crisis", "financial crisis"], "FIN CRISIS", "red"),
+    (["dollar", "euro", "sterling", "yen", "eurozone", "emerging market"], "FX / EM", "amber"),
+    (["earnings"], "EARNINGS", "green"),
+]
+
+def classify_market(title_lower):
+    """
+    Inclusion-based market classifier.
+    Returns (relevance_tag, color) if the market is financially relevant.
+    Returns (None, None) if it should be excluded (sports, entertainment, etc).
+    """
+    # Gate: must contain at least one financial keyword
+    has_financial = False
+    for kw in FINANCIAL_KEYWORDS:
+        if kw in title_lower:
+            has_financial = True
+            break
+    if not has_financial:
+        return None, None
+
+    # Find the best relevance category
+    for keywords, tag, color in RELEVANCE_MAP:
+        for kw in keywords:
+            if kw in title_lower:
+                return tag, color
+
+    # Passed the financial gate but no specific category — general financial
+    return "FINANCIAL", "neutral"
+
 # ── Polymarket ──
 poly_cache = []
 poly_ts = 0
@@ -162,9 +248,15 @@ async def fetch_polymarket():
     now = time.time()
     if now - poly_ts < 60 and poly_cache:
         return poly_cache
-    queries = ["fed rate","inflation","recession","AI","bitcoin","nvidia",
-               "semiconductor","interest rate","GDP","quantum computing",
-               "tech stocks","S&P 500","tariff","crypto","trade war"]
+    queries = [
+               "federal reserve rate", "inflation CPI", "recession GDP",
+               "nvidia semiconductor", "bitcoin crypto regulation",
+               "interest rate cut", "S&P 500 stock market",
+               "tariff trade war sanctions", "quantum computing",
+               "oil crude commodity", "treasury bond yield",
+               "earnings", "unemployment jobs", "debt ceiling",
+               "artificial intelligence regulation", "dollar euro currency",
+               ]
     results = []
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
         for q in queries:
@@ -190,17 +282,12 @@ async def fetch_polymarket():
                         vol = float(m.get("volume", 0) or 0)
                         vol24 = float(m.get("volume24hr", 0) or 0)
                         ql = question.lower()
-                        rel, rc = "GENERAL", "neutral"
-                        if any(w in ql for w in ["fed","fomc","rate cut","rate hike"]): rel, rc = "RATES \u2192 TECH", "green"
-                        elif "recession" in ql: rel, rc = "RISK-OFF", "amber"
-                        elif any(w in ql for w in ["nvidia","nvda"]): rel, rc = "NVDA DIRECT", "green"
-                        elif any(w in ql for w in ["bitcoin","btc","crypto","ethereum"]): rel, rc = "CRYPTO", "amber"
-                        elif any(w in ql for w in ["inflation","cpi"]): rel, rc = "MACRO", "green"
-                        elif any(w in ql for w in ["ai ","artificial intel"]): rel, rc = "AI SECTOR", "green"
-                        elif "quantum" in ql: rel, rc = "QUANTUM", "green"
-                        elif any(w in ql for w in ["gdp","growth"]): rel, rc = "GROWTH", "amber"
-                        elif any(w in ql for w in ["tariff","trade war"]): rel, rc = "TRADE RISK", "red"
-                        elif any(w in ql for w in ["s&p","nasdaq","stock"]): rel, rc = "INDEX", "green"
+                        # ── INCLUSION GATE: must contain a financial keyword ──
+                        # This replaces exclusion blacklists (sports, entertainment).
+                        # If none match, the contract is silently dropped.
+                        rel, rc = classify_market(ql)
+                        if not rel:
+                            continue
                         results.append({"question": question, "tag": q,
                             "yesPrice": round(yp, 3), "noPrice": round(np, 3),
                             "volume": vol, "vol24": vol24,

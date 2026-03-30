@@ -248,57 +248,129 @@ async def fetch_polymarket():
     now = time.time()
     if now - poly_ts < 60 and poly_cache:
         return poly_cache
-    queries = [
-               "fed", "inflation", "recession", "bitcoin", "nvidia",
-               "interest rate", "GDP", "tariff", "oil", "gold",
-               "S&P", "nasdaq", "semiconductor", "quantum",
-               "earnings", "unemployment", "treasury", "AI",
-               "crypto", "trade", "dollar", "bond",
-               ]
+
     results = []
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        for q in queries:
+
+    # ── Strategy: bulk fetch 200 top markets by volume, filter locally ──
+    # Polymarket's search/tag API params are unreliable.
+    # Fetch by volume, apply inclusion whitelist client-side.
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        for offset in [0, 100]:
             try:
                 resp = await client.get("https://gamma-api.polymarket.com/markets",
-                    params={"_q": q, "active": "true", "closed": "false",
-                            "limit": "10", "order": "volume24hr", "ascending": "false",
-                            "startDateMin": "2025-01-01"})
-                if resp.status_code == 200:
-                    items = resp.json()
-                    if not isinstance(items, list): items = items.get("data", [])
-                    for m in items:
-                        question = m.get("question", "")
-                        if not question: continue
-                        try:
-                            ps = m.get("outcomePrices", "[]")
-                            pp = json.loads(ps) if isinstance(ps, str) else (ps or [])
-                        except: continue
-                        if len(pp) < 2: continue
-                        yp = float(pp[0] or 0)
-                        np = float(pp[1] or 0)
-                        if yp < 0.02 or yp > 0.98: continue
-                        vol = float(m.get("volume", 0) or 0)
-                        vol24 = float(m.get("volume24hr", 0) or 0)
-                        ql = question.lower()
-                        # ── INCLUSION GATE: must contain a financial keyword ──
-                        # This replaces exclusion blacklists (sports, entertainment).
-                        # If none match, the contract is silently dropped.
-                        rel, rc = classify_market(ql)
-                        if not rel:
-                            continue
-                        results.append({"question": question, "tag": q,
-                            "yesPrice": round(yp, 3), "noPrice": round(np, 3),
-                            "volume": vol, "vol24": vol24,
-                            "relevance": rel, "relColor": rc})
+                    params={"active": "true", "closed": "false",
+                            "limit": "100", "offset": str(offset),
+                            "order": "volume", "ascending": "false"})
+                if resp.status_code != 200:
+                    logger.warning(f"Polymarket offset={offset}: status {resp.status_code}")
+                    continue
+                items = resp.json()
+                if not isinstance(items, list):
+                    items = items.get("data", [])
+
+                for m in items:
+                    question = m.get("question", "")
+                    if not question:
+                        continue
+                    ql = question.lower()
+
+                    # ── EXCLUSION 1: Sports matchups (catches "Team A vs Team B") ──
+                    if " vs " in ql or " vs. " in ql:
+                        continue
+
+                    # ── EXCLUSION 2: Tiny blocklist for edge cases ──
+                    BLOCK = ["mvp", "award", "temperature", "weather", "winner of",
+                             "touchdown", "home run", "goal scored", "world cup",
+                             "premier league", "nba", "nfl", "nhl", "mlb",
+                             "oscar", "grammy", "emmy", "bachelor"]
+                    if any(b in ql for b in BLOCK):
+                        continue
+
+                    # Parse prices
+                    try:
+                        ps = m.get("outcomePrices", "[]")
+                        pp = json.loads(ps) if isinstance(ps, str) else (ps or [])
+                    except:
+                        continue
+                    if len(pp) < 2:
+                        continue
+                    yp = float(pp[0] or 0)
+                    np = float(pp[1] or 0)
+
+                    # Skip near-resolved markets
+                    if yp < 0.05 or yp > 0.95:
+                        continue
+
+                    # ── INCLUSION GATE: must contain a financial keyword ──
+                    # This is the primary filter. "war" excluded as standalone
+                    # (matched "Warsaw") — kept only as "trade war".
+                    FIN_KW = [
+                        # Monetary policy
+                        "fed", "federal reserve", "fomc", "rate cut", "rate hike",
+                        "interest rate", "central bank", "ecb",
+                        # Inflation
+                        "inflation", "cpi", "pce", "deflation",
+                        # Growth
+                        "recession", "gdp", "unemployment", "jobs report", "payroll",
+                        # Fiscal / geopolitical
+                        "tariff", "trade war", "sanctions", "debt ceiling",
+                        "government shutdown",
+                        # Commodities
+                        "oil", "crude", "brent", "opec", "natural gas",
+                        "gold price", "silver price", "commodity",
+                        # Equities / indices
+                        "s&p", "nasdaq", "dow jones", "stock market",
+                        "bear market", "bull market", "earnings",
+                        # Tech / AI
+                        "nvidia", "semiconductor", "chip export",
+                        "artificial intelligence", "ai regulation",
+                        "quantum computing", "openai", "chatgpt",
+                        # Companies
+                        "apple", "microsoft", "google", "amazon", "meta",
+                        "tesla", "tsmc", "amd", "broadcom",
+                        # Crypto
+                        "bitcoin", "btc", "ethereum", "crypto",
+                        # FX
+                        "dollar", "euro ", "sterling", "yen",
+                    ]
+
+                    matched_kw = None
+                    for kw in FIN_KW:
+                        if kw in ql:
+                            matched_kw = kw
+                            break
+                    if not matched_kw:
+                        continue
+
+                    # ── Classify relevance ──
+                    rel, rc = classify_market(ql)
+                    if not rel:
+                        rel, rc = "FINANCIAL", "neutral"
+
+                    vol = float(m.get("volume", 0) or 0)
+                    vol24 = float(m.get("volume24hr", 0) or 0)
+
+                    results.append({
+                        "question": question, "tag": matched_kw,
+                        "yesPrice": round(yp, 3), "noPrice": round(np, 3),
+                        "volume": vol, "vol24": vol24,
+                        "relevance": rel, "relColor": rc,
+                    })
+
+                logger.info(f"Polymarket offset={offset}: {len(items)} raw, running total {len(results)} financial")
+
             except Exception as e:
-                logger.warning(f"Poly '{q}' error: {e}")
+                logger.warning(f"Polymarket fetch error: {e}")
+
+    # Deduplicate
     seen = set()
     unique = [r for r in results if r["question"] not in seen and not seen.add(r["question"])]
     unique.sort(key=lambda x: x["vol24"], reverse=True)
+
     if unique:
         poly_cache = unique
         poly_ts = now
-        logger.info(f"Polymarket: {len(unique)} markets")
+    logger.info(f"Polymarket final: {len(unique)} financial markets from 200 scanned")
     return poly_cache
 
 # ── Portfolio ──

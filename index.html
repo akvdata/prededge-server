@@ -86,6 +86,7 @@ tr:hover{background:var(--bg2)}
   <div class="pane" id="p-etf"></div>
   <div class="pane" id="p-odds"></div>
   <div class="pane" id="p-pf"></div>
+  <div class="pane" id="p-res"></div>
   <div class="pane" id="p-stats"></div>
 </div>
 <div class="modal-bg" id="modal" onclick="if(event.target===this)closeModal()"><div class="modal" id="mbody"></div></div>
@@ -93,7 +94,7 @@ tr:hover{background:var(--bg2)}
 
 <script>
 var API=location.origin,prices={},polyData=[],portfolio=[],isDark=true;
-var TABS=[["ov","&#127968; Overview"],["q","&#9883;&#65039; Quantum"],["ai","&#129302; AI Infra"],["etf","&#128200; ETFs"],["odds","&#127922; Odds"],["pf","&#128188; Portfolio"]];
+var TABS=[["ov","&#127968; Overview"],["q","&#9883;&#65039; Quantum"],["ai","&#129302; AI Infra"],["etf","&#128200; ETFs"],["odds","&#127922; Odds"],["pf","&#128188; Portfolio"],["res","&#128269; Research"]];
 if(location.search.indexOf("stats")>=0) TABS.push(["stats","&#128202; Analytics"]);
 
 // Render tabs
@@ -139,8 +140,162 @@ async function loadPrices(){try{var r=await fetch(API+"/api/prices");var d=await
 async function loadPoly(){try{var r=await fetch(API+"/api/polymarket");var d=await r.json();polyData=d.markets||[];return true}catch(e){return false}}
 async function loadPf(){try{var r=await fetch(API+"/api/portfolio");var d=await r.json();portfolio=d.positions||[];return true}catch(e){return false}}
 
-function renderAll(){var all=Object.values(prices);renderOverview();document.getElementById("p-q").innerHTML=sectionHTML(all.filter(function(s){return s.sector==="quantum"}),"Quantum computing");document.getElementById("p-ai").innerHTML=sectionHTML(all.filter(function(s){return s.sector==="ai"}),"AI & tech infrastructure");document.getElementById("p-etf").innerHTML=sectionHTML(all.filter(function(s){return s.sector==="etf"}),"Sector ETFs");renderOdds();renderPortfolio();renderStats();document.getElementById("sb-l").textContent="Stocks: "+all.length+" \u00b7 Poly: "+polyData.length+" \u00b7 Portfolio: "+portfolio.length}
+function renderAll(){var all=Object.values(prices);renderOverview();document.getElementById("p-q").innerHTML=sectionHTML(all.filter(function(s){return s.sector==="quantum"}),"Quantum computing");document.getElementById("p-ai").innerHTML=sectionHTML(all.filter(function(s){return s.sector==="ai"}),"AI & tech infrastructure");document.getElementById("p-etf").innerHTML=sectionHTML(all.filter(function(s){return s.sector==="etf"}),"Sector ETFs");renderOdds();renderPortfolio();renderResearch();renderStats();document.getElementById("sb-l").textContent="Stocks: "+all.length+" \u00b7 Poly: "+polyData.length+" \u00b7 Portfolio: "+portfolio.length}
 function updSt(){document.getElementById("status").textContent="LIVE \u00b7 "+Object.keys(prices).length+" stocks \u00b7 "+polyData.length+" odds";document.getElementById("status").style.color="var(--gn)"}
+
+
+// ── Research Tab ──
+var researchData=null;
+var researchLoading=false;
+
+function renderResearch(){
+  var el=document.getElementById("p-res");
+  if(!el)return;
+  var searchHTML='<div class="sh"><div class="sh-t">Research</div><div class="sh-s">Search any stock or ETF for deep analysis</div></div>'+
+    '<div style="display:flex;gap:8px;margin-bottom:16px"><input class="inp" type="text" id="res-input" placeholder="Enter ticker... e.g. NVDA, QQQ, IONQ" style="flex:1" onkeydown="if(event.key==='Enter')doLookup()"><button class="btn btn-g" style="background:var(--or);color:#000;white-space:nowrap" onclick="doLookup()">LOOKUP</button></div>';
+
+  if(researchLoading){
+    el.innerHTML=searchHTML+'<div style="padding:40px;text-align:center;color:var(--or)"><div class="mn" style="font-size:14px;margin-bottom:8px">Fetching data...</div><div style="font-size:11px;color:var(--tx3)">This may take 10-15 seconds for related stocks</div></div>';
+    return;
+  }
+  if(!researchData){
+    el.innerHTML=searchHTML+'<div style="padding:40px;text-align:center;color:var(--tx3)"><div style="font-size:13px;margin-bottom:6px">Type a ticker above and hit Lookup</div><div style="font-size:11px">Works with any US stock or ETF</div></div>';
+    return;
+  }
+  if(researchData.error){
+    el.innerHTML=searchHTML+'<div style="padding:20px;text-align:center;color:var(--rd)">'+researchData.error+'</div>';
+    return;
+  }
+
+  var d=researchData;
+  var p=d.price||{};
+  var ind=d.indicators||{};
+  var col=p.change>=0?"var(--gn)":"var(--rd)";
+  var arr=p.change>=0?"\u25B2":"\u25BC";
+  var ytdCol=(p.ytdPct||0)>=0?"var(--gn)":"var(--rd)";
+
+  // Format market cap
+  function fmtCap(v){if(!v)return"\u2014";if(v>=1e12)return"$"+(v/1e12).toFixed(2)+"T";if(v>=1e9)return"$"+(v/1e9).toFixed(1)+"B";if(v>=1e6)return"$"+(v/1e6).toFixed(0)+"M";return"$"+v}
+
+  // Tags
+  var tags='<span class="mn" style="display:inline-block;padding:3px 8px;font-size:9px;font-weight:600;margin-right:4px;'+(d.type==="ETF"?"background:var(--bg2);color:var(--bl);border:1px solid var(--bl)":"background:var(--bg2);color:var(--gn);border:1px solid var(--gn)")+'">'+d.type+'</span>';
+  if(d.sector)tags+='<span class="mn" style="display:inline-block;padding:3px 8px;font-size:9px;font-weight:600;margin-right:4px;background:var(--bg2);color:var(--pk);border:1px solid var(--pk)">'+d.sector+'</span>';
+  if(d.industry)tags+='<span class="mn" style="display:inline-block;padding:3px 8px;font-size:9px;font-weight:600;margin-right:4px;background:var(--bg2);color:var(--bl);border:1px solid var(--bl)">'+d.industry+'</span>';
+
+  // Analyst bar
+  var an=d.analysts||{};
+  var tot=d.totalAnalysts||0;
+  function pct(v){return tot>0?Math.round(v/tot*100):0}
+  var analystBar=tot>0?'<div style="margin-top:10px"><div class="mn" style="font-size:9px;color:var(--tx3);text-transform:uppercase;margin-bottom:4px">Analyst consensus ('+tot+')</div><div style="display:flex;height:18px;border-radius:2px;overflow:hidden">'+
+    (an.strongBuy?'<div style="width:'+pct(an.strongBuy)+'%;background:var(--gn);display:flex;align-items:center;justify-content:center;font:700 8px var(--mn,monospace);color:#000">'+an.strongBuy+'</div>':'')+
+    (an.buy?'<div style="width:'+pct(an.buy)+'%;background:var(--bl);display:flex;align-items:center;justify-content:center;font:700 8px var(--mn,monospace);color:#000">'+an.buy+'</div>':'')+
+    (an.hold?'<div style="width:'+pct(an.hold)+'%;background:var(--yl);display:flex;align-items:center;justify-content:center;font:700 8px var(--mn,monospace);color:#000">'+an.hold+'</div>':'')+
+    (an.sell?'<div style="width:'+pct(an.sell)+'%;background:var(--rd);display:flex;align-items:center;justify-content:center;font:700 8px var(--mn,monospace);color:#fff">'+an.sell+'</div>':'')+
+    (an.strongSell?'<div style="width:'+pct(an.strongSell)+'%;background:#991111;display:flex;align-items:center;justify-content:center;font:700 8px var(--mn,monospace);color:#fff">'+an.strongSell+'</div>':'')+
+    '</div><div style="display:flex;justify-content:space-between;font:400 8px var(--mn,monospace);color:var(--tx4);margin-top:2px"><span>Strong buy</span><span>Buy</span><span>Hold</span><span>Sell</span></div></div>':'';
+
+  // Target price
+  var targetHTML=ind.targetPrice?'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Analyst target</span><span class="mn" style="font-weight:600;color:var(--gn)">$'+ind.targetPrice.toFixed(2)+'</span></div><div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px"><span style="color:var(--tx3)">Upside</span><span class="mn" style="font-weight:600;color:'+(((ind.targetPrice-p.current)/p.current*100)>=0?"var(--gn)":"var(--rd)")+'">'+(((ind.targetPrice-p.current)/p.current*100)>=0?"+":"")+((ind.targetPrice-p.current)/p.current*100).toFixed(1)+'%</span></div>':'';
+
+  // News
+  var newsHTML='';
+  if(d.news&&d.news.length){
+    newsHTML=d.news.map(function(n){return'<div style="padding:7px 0;border-bottom:1px solid var(--bd)"><div style="font-size:11px;color:var(--tx)">'+(n.link?'<a href="'+n.link+'" target="_blank" style="color:var(--tx);text-decoration:none">'+n.title+'</a>':n.title)+'</div><div style="font-size:9px;color:var(--tx4);margin-top:2px">'+n.publisher+'</div></div>'}).join("");
+  }else{
+    newsHTML='<div style="padding:12px;text-align:center;font-size:11px;color:var(--tx4)">No recent news available</div>';
+  }
+
+  // Related stocks with 52W bars
+  var relHTML='';
+  if(d.related&&d.related.length){
+    relHTML='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:8px">'+d.related.map(function(r){
+      var rc=r.change>=0?"var(--gn)":"var(--rd)";
+      var rp=Math.max(0,Math.min(100,r.w52Pct||50));
+      return'<div style="background:var(--bgc);border:1px solid var(--bd);padding:10px;cursor:pointer" onclick="doLookupTicker(''+r.ticker+'')">'+
+        '<div style="display:flex;gap:8px;align-items:flex-start">'+
+        '<div class="mn" style="width:34px;height:34px;border-radius:4px;background:'+(r.color||"#444")+';display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0">'+r.ticker.substring(0,3)+'</div>'+
+        '<div style="flex:1;min-width:0">'+
+        '<div style="display:flex;justify-content:space-between;align-items:baseline"><span class="mn" style="font-weight:700;font-size:13px;color:var(--or)">'+r.ticker+'</span><span class="mn" style="font-weight:700;font-size:13px;color:'+rc+'">$'+(r.price||0).toFixed(2)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between"><span style="font-size:9px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(r.name||r.ticker)+'</span><span class="mn" style="font-size:9px;font-weight:600;color:'+rc+'">'+(r.changePct>=0?"+":"")+(r.changePct||0).toFixed(2)+'%</span></div>'+
+        '<div style="margin:5px 0 2px"><div style="display:flex;justify-content:space-between;font:400 7px var(--mn,monospace);color:var(--tx4)"><span>$'+(r.w52Low||0).toFixed(2)+'</span><span style="color:var(--or);font-weight:600;font-size:8px">'+rp.toFixed(0)+'%</span><span>$'+(r.w52High||0).toFixed(2)+'</span></div>'+
+        '<div style="height:4px;background:var(--bd);border-radius:2px;position:relative;margin-top:2px;overflow:visible"><div style="height:4px;border-radius:2px;background:linear-gradient(90deg,var(--rl),var(--yl),var(--rr));opacity:0.25;width:100%"></div><div style="position:absolute;left:'+rp+'%;top:50%;width:9px;height:9px;background:var(--or);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 5px var(--or)"></div></div></div>'+
+        '<div style="font-size:8px;color:var(--tx4);margin-top:3px;border-top:1px solid var(--bd);padding-top:3px">'+r.rel+'</div>'+
+        '</div></div></div>'}).join("")+'</div>';
+  }
+
+  // ETF exposure or holdings
+  var etfHTML='';
+  if(d.type==="ETF"&&d.holdings&&d.holdings.length){
+    etfHTML='<div style="background:var(--bgc);border:1px solid var(--bd);padding:12px;margin-bottom:10px"><div class="mn" style="font-size:10px;font-weight:600;color:var(--bl);text-transform:uppercase;margin-bottom:8px;border-bottom:1px solid var(--bd);padding-bottom:6px">Top holdings</div>'+
+      d.holdings.map(function(h){return'<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--bd);font-size:10px"><span class="mn" style="font-weight:700;color:var(--or);width:50px;cursor:pointer" onclick="doLookupTicker(''+h.ticker+'')">'+h.ticker+'</span><span style="color:var(--tx2);flex:1">'+h.name+'</span><div style="width:80px;height:4px;background:var(--bd);border-radius:2px"><div style="height:4px;background:var(--bl);border-radius:2px;width:'+Math.min(h.weight*10,100)+'%"></div></div><span class="mn" style="font-weight:600;color:var(--tx);width:45px;text-align:right">'+h.weight.toFixed(1)+'%</span></div>'}).join("")+'</div>';
+  }else if(d.etfExposure&&d.etfExposure.length){
+    etfHTML='<div style="background:var(--bgc);border:1px solid var(--bd);padding:12px;margin-bottom:10px"><div class="mn" style="font-size:10px;font-weight:600;color:var(--bl);text-transform:uppercase;margin-bottom:8px;border-bottom:1px solid var(--bd);padding-bottom:6px">ETF exposure</div>'+
+      d.etfExposure.map(function(e){return'<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--bd);font-size:10px"><span class="mn" style="font-weight:700;color:var(--bl);width:50px">'+e.etf+'</span><div style="flex:1;height:4px;background:var(--bd);border-radius:2px"><div style="height:4px;background:var(--bl);border-radius:2px;width:'+Math.min(e.weight*4,100)+'%"></div></div><span class="mn" style="font-weight:600;color:var(--tx);width:45px;text-align:right">'+e.weight+'%</span></div>'}).join("")+'</div>';
+  }
+
+  // Assemble
+  el.innerHTML=searchHTML+
+    '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:4px"><span class="mn" style="font-size:22px;font-weight:700;color:var(--or)">'+d.ticker+'</span><span style="font-size:13px;color:var(--tx2)">'+d.name+'</span></div>'+
+    '<div style="margin-bottom:4px">'+tags+'</div>'+
+    (d.desc?'<div style="font-size:10px;color:var(--tx4);margin-bottom:14px;line-height:1.4">'+d.desc+'</div>':'')+
+    '<div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap">'+
+      '<div style="flex:1;min-width:220px">'+
+        '<div style="background:var(--bgc);border:1px solid var(--bd);padding:12px;margin-bottom:10px">'+
+          '<div class="mn" style="font-size:10px;font-weight:600;color:var(--or);text-transform:uppercase;margin-bottom:8px;border-bottom:1px solid var(--bd);padding-bottom:6px">Price and performance</div>'+
+          '<div class="mn" style="font-size:28px;font-weight:700;color:'+col+';margin-bottom:2px">$'+p.current.toFixed(2)+'</div>'+
+          '<div class="mn" style="font-size:12px;font-weight:600;color:'+col+';margin-bottom:10px">'+arr+' '+Math.abs(p.change).toFixed(2)+' ('+(p.changePct>=0?"+":"")+p.changePct.toFixed(2)+'%)</div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Prev close</span><span class="mn" style="font-weight:600">$'+p.prevClose.toFixed(2)+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Day range</span><span class="mn" style="font-weight:600">$'+(p.dayLow||0).toFixed(2)+' - $'+(p.dayHigh||0).toFixed(2)+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">52W range</span><span class="mn" style="font-weight:600">$'+p.w52Low.toFixed(2)+' - $'+p.w52High.toFixed(2)+'</span></div>'+
+          '<div style="margin:8px 0"><div style="display:flex;justify-content:space-between;font:400 8px var(--mn,monospace);color:var(--tx3)"><span>$'+p.w52Low.toFixed(2)+'</span><span style="color:var(--or);font-weight:600;font-size:9px">'+p.w52Pct.toFixed(0)+'%</span><span>$'+p.w52High.toFixed(2)+'</span></div><div style="height:6px;background:var(--bd);border-radius:3px;position:relative;margin-top:2px;overflow:visible"><div style="height:6px;border-radius:3px;background:linear-gradient(90deg,var(--rl),var(--yl),var(--rr));opacity:0.25;width:100%"></div><div style="position:absolute;left:'+p.w52Pct+'%;top:50%;width:12px;height:12px;background:var(--or);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 6px var(--or)"></div></div></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">YTD return</span><span class="mn" style="font-weight:600;color:'+ytdCol+'">'+(p.ytdPct>=0?"+":"")+p.ytdPct.toFixed(1)+'%</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Volume</span><span class="mn" style="font-weight:600">'+(p.volume?p.volume.toLocaleString():"\u2014")+'</span></div>'+
+        '</div>'+
+      '</div>'+
+      '<div style="flex:1;min-width:220px">'+
+        '<div style="background:var(--bgc);border:1px solid var(--bd);padding:12px;margin-bottom:10px">'+
+          '<div class="mn" style="font-size:10px;font-weight:600;color:var(--or);text-transform:uppercase;margin-bottom:8px;border-bottom:1px solid var(--bd);padding-bottom:6px">Key indicators</div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Market cap</span><span class="mn" style="font-weight:600">'+fmtCap(ind.marketCap)+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">P/E (trailing)</span><span class="mn" style="font-weight:600">'+(ind.peTrailing||"\u2014")+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">P/E (forward)</span><span class="mn" style="font-weight:600">'+(ind.peForward||"\u2014")+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Beta</span><span class="mn" style="font-weight:600">'+(ind.beta||"\u2014")+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">Div yield</span><span class="mn" style="font-weight:600">'+(ind.divYield?ind.divYield+"%":"\u2014")+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bd);font-size:11px"><span style="color:var(--tx3)">RSI (14d)</span><span class="mn" style="font-weight:600;color:'+((ind.rsi||50)<30?"var(--gn)":(ind.rsi||50)>70?"var(--rd)":"var(--tx)")+'">'+(ind.rsi||"\u2014")+'</span></div>'+
+          targetHTML+
+          analystBar+
+        '</div>'+
+      '</div>'+
+    '</div>'+
+    '<div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap">'+
+      '<div style="flex:1;min-width:220px"><div style="background:var(--bgc);border:1px solid var(--bd);padding:12px"><div class="mn" style="font-size:10px;font-weight:600;color:var(--or);text-transform:uppercase;margin-bottom:8px;border-bottom:1px solid var(--bd);padding-bottom:6px">News</div>'+newsHTML+'</div></div>'+
+      '<div style="flex:1;min-width:220px">'+etfHTML+'</div>'+
+    '</div>'+
+    (d.related&&d.related.length?'<div style="background:var(--bgc);border:1px solid var(--bd);padding:12px;margin-bottom:12px"><div class="mn" style="font-size:10px;font-weight:600;color:var(--or);text-transform:uppercase;margin-bottom:10px;border-bottom:1px solid var(--bd);padding-bottom:6px">'+(d.type==="ETF"?"Related ETFs":"Related stocks — supply chain and competitors")+'</div>'+relHTML+'</div>':'');
+}
+
+async function doLookup(){
+  var inp=document.getElementById("res-input");
+  if(!inp)return;
+  var ticker=inp.value.trim().toUpperCase();
+  if(!ticker)return;
+  researchLoading=true;
+  researchData=null;
+  renderResearch();
+  try{
+    var r=await fetch(API+"/api/lookup/"+encodeURIComponent(ticker));
+    researchData=await r.json();
+  }catch(e){
+    researchData={error:"Failed to fetch data. Try again."};
+  }
+  researchLoading=false;
+  renderResearch();
+}
+
+function doLookupTicker(t){
+  var inp=document.getElementById("res-input");
+  if(inp)inp.value=t;
+  doLookup();
+}
 
 async function init(){var tick=function(){document.getElementById("clock").textContent=new Date().toLocaleTimeString("en-GB")};tick();setInterval(tick,1000);trackVisit();await Promise.all([loadPrices(),loadPoly(),loadPf()]);if(Object.keys(prices).length)updSt();else{document.getElementById("status").textContent="API offline";document.getElementById("status").style.color="var(--rd)"}renderAll();setInterval(async function(){await loadPrices();renderAll()},30000);setInterval(async function(){await loadPoly();renderOdds()},60000)}
 init();

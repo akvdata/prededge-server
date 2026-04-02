@@ -250,6 +250,91 @@ async def fetch_polymarket():
         return poly_cache
 
     results = []
+    BLOCK = ["mvp", "award", "temperature", "weather", "winner of",
+             "touchdown", "home run", "goal scored", "world cup",
+             "premier league", "nba", "nfl", "nhl", "mlb",
+             "oscar", "grammy", "emmy", "bachelor", "up or down",
+             "app store", "apple store", "free app"]
+    FIN_KW = [
+        "fed", "federal reserve", "fomc", "rate cut", "rate hike",
+        "interest rate", "central bank", "ecb",
+        "inflation", "cpi", "pce", "deflation",
+        "recession", "gdp", "unemployment", "jobs report", "payroll",
+        "tariff", "trade war", "sanctions", "debt ceiling", "government shutdown",
+        "oil", "crude", "brent", "opec", "natural gas",
+        "gold price", "silver price", "commodity",
+        "s&p", "nasdaq", "dow jones", "stock market",
+        "bear market", "bull market", "earnings",
+        "nvidia", "semiconductor", "chip export",
+        "artificial intelligence", "ai regulation",
+        "quantum computing", "openai", "chatgpt",
+        "microsoft", "google", "amazon", "meta", "tesla", "tsmc", "amd", "broadcom",
+        "bitcoin", "btc", "ethereum", "crypto",
+        "dollar", "euro ", "sterling", "yen",
+    ]
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        for offset in [0, 100]:
+            try:
+                resp = await client.get("https://gamma-api.polymarket.com/markets",
+                    params={"active": "true", "closed": "false",
+                            "limit": "100", "offset": str(offset),
+                            "order": "volume", "ascending": "false"})
+                if resp.status_code != 200:
+                    continue
+                items = resp.json()
+                if not isinstance(items, list):
+                    items = items.get("data", [])
+                for m in items:
+                    question = m.get("question", "")
+                    if not question:
+                        continue
+                    ql = question.lower()
+                    if " vs " in ql or " vs. " in ql:
+                        continue
+                    if any(b in ql for b in BLOCK):
+                        continue
+                    try:
+                        ps = m.get("outcomePrices", "[]")
+                        pp = json.loads(ps) if isinstance(ps, str) else (ps or [])
+                    except:
+                        continue
+                    if len(pp) < 2:
+                        continue
+                    yp = float(pp[0] or 0)
+                    np = float(pp[1] or 0)
+                    if yp < 0.05 or yp > 0.95:
+                        continue
+                    matched_kw = None
+                    for kw in FIN_KW:
+                        if kw in ql:
+                            matched_kw = kw
+                            break
+                    if not matched_kw:
+                        continue
+                    rel, rc = classify_market(ql)
+                    if not rel:
+                        rel, rc = "FINANCIAL", "neutral"
+                    vol = float(m.get("volume", 0) or 0)
+                    vol24 = float(m.get("volume24hr", 0) or 0)
+                    results.append({"question": question, "tag": matched_kw,
+                        "yesPrice": round(yp, 3), "noPrice": round(np, 3),
+                        "volume": vol, "vol24": vol24,
+                        "relevance": rel, "relColor": rc})
+                logger.info(f"Polymarket offset={offset}: {len(items)} raw, {len(results)} financial")
+            except Exception as e:
+                logger.warning(f"Polymarket error: {e}")
+
+    seen = set()
+    unique = [r for r in results if r["question"] not in seen and not seen.add(r["question"])]
+    unique.sort(key=lambda x: x["vol24"], reverse=True)
+    if unique:
+        poly_cache = unique
+        poly_ts = now
+    logger.info(f"Polymarket final: {len(unique)} financial markets")
+    return poly_cache
+
+    results = []
 
     # ── Strategy: bulk fetch 200 top markets by volume, filter locally ──
     # Polymarket's search/tag API params are unreliable.
@@ -372,6 +457,296 @@ async def fetch_polymarket():
         poly_ts = now
     logger.info(f"Polymarket final: {len(unique)} financial markets from 200 scanned")
     return poly_cache
+
+
+# ── Supply Chain Mapping ──
+SUPPLY_CHAIN = {
+    "NVDA": [
+        {"t":"AMD","rel":"Competitor - MI300X AI GPUs","color":"#ed1c24"},
+        {"t":"TSM","rel":"Foundry - fabricates NVDA chips","color":"#0066b3"},
+        {"t":"AVGO","rel":"Networking for AI clusters","color":"#cc0000"},
+        {"t":"SMCI","rel":"Builds NVDA GPU servers","color":"#0055a4"},
+        {"t":"MRVL","rel":"Custom AI accelerator rival","color":"#8b1a1a"},
+        {"t":"VRT","rel":"Powers NVDA data centres","color":"#00263e"},
+        {"t":"MSFT","rel":"Largest NVDA GPU customer","color":"#00a4ef"},
+        {"t":"ANET","rel":"Network switches for GPU clusters","color":"#6d9e37"},
+    ],
+    "AMD": [
+        {"t":"NVDA","rel":"Primary competitor - AI GPUs","color":"#76b900"},
+        {"t":"TSM","rel":"Foundry - fabricates AMD chips","color":"#0066b3"},
+        {"t":"DELL","rel":"Server partner - AMD EPYC","color":"#007db8"},
+        {"t":"MSFT","rel":"Azure customer - AMD MI300X","color":"#00a4ef"},
+        {"t":"MRVL","rel":"Competitor - custom silicon","color":"#8b1a1a"},
+    ],
+    "TSM": [
+        {"t":"NVDA","rel":"Largest customer - AI chips","color":"#76b900"},
+        {"t":"AMD","rel":"Major customer - CPUs/GPUs","color":"#ed1c24"},
+        {"t":"AVGO","rel":"Customer - networking chips","color":"#cc0000"},
+        {"t":"AAPL","rel":"Customer - iPhone/Mac chips","color":"#555555"},
+        {"t":"MRVL","rel":"Customer - custom silicon","color":"#8b1a1a"},
+    ],
+    "AVGO": [
+        {"t":"NVDA","rel":"Competes in AI networking","color":"#76b900"},
+        {"t":"TSM","rel":"Foundry partner","color":"#0066b3"},
+        {"t":"ANET","rel":"Competes in data centre networking","color":"#6d9e37"},
+        {"t":"MSFT","rel":"Customer - custom AI chips","color":"#00a4ef"},
+    ],
+    "SMCI": [
+        {"t":"NVDA","rel":"Key GPU supplier","color":"#76b900"},
+        {"t":"AMD","rel":"CPU supplier - EPYC servers","color":"#ed1c24"},
+        {"t":"DELL","rel":"Competitor - AI servers","color":"#007db8"},
+        {"t":"VRT","rel":"Cooling/power for servers","color":"#00263e"},
+    ],
+    "IONQ": [
+        {"t":"GOOG","rel":"Competitor - Willow quantum chip","color":"#4285f4"},
+        {"t":"IBM","rel":"Competitor - Heron quantum chip","color":"#0530ad"},
+        {"t":"RGTI","rel":"Competitor - superconducting QC","color":"#6a0dad"},
+        {"t":"MSFT","rel":"Azure Quantum partner","color":"#00a4ef"},
+        {"t":"ARQQ","rel":"Competitor - quantum encryption","color":"#333"},
+    ],
+    "RGTI": [
+        {"t":"IONQ","rel":"Competitor - trapped-ion QC","color":"#1a73e8"},
+        {"t":"IBM","rel":"Competitor - Heron chip","color":"#0530ad"},
+        {"t":"GOOG","rel":"Competitor - Willow chip","color":"#4285f4"},
+        {"t":"QBTS","rel":"Competitor - quantum annealing","color":"#555"},
+    ],
+    "MSFT": [
+        {"t":"NVDA","rel":"GPU supplier for Azure AI","color":"#76b900"},
+        {"t":"GOOG","rel":"Competitor - cloud AI","color":"#4285f4"},
+        {"t":"AMD","rel":"CPU/GPU supplier for Azure","color":"#ed1c24"},
+        {"t":"DELL","rel":"Server hardware partner","color":"#007db8"},
+        {"t":"IONQ","rel":"Azure Quantum partner","color":"#1a73e8"},
+    ],
+    "DELL": [
+        {"t":"NVDA","rel":"GPU supplier for AI servers","color":"#76b900"},
+        {"t":"AMD","rel":"CPU supplier - EPYC","color":"#ed1c24"},
+        {"t":"SMCI","rel":"Competitor - AI servers","color":"#0055a4"},
+        {"t":"MSFT","rel":"Customer - Azure hardware","color":"#00a4ef"},
+        {"t":"VRT","rel":"Data centre infrastructure","color":"#00263e"},
+    ],
+    "VRT": [
+        {"t":"NVDA","rel":"Powers GPU data centres","color":"#76b900"},
+        {"t":"DELL","rel":"Data centre partner","color":"#007db8"},
+        {"t":"SMCI","rel":"Cooling for GPU servers","color":"#0055a4"},
+        {"t":"ANET","rel":"Co-located in data centres","color":"#6d9e37"},
+    ],
+    "ANET": [
+        {"t":"NVDA","rel":"Networking for GPU clusters","color":"#76b900"},
+        {"t":"AVGO","rel":"Competitor - networking","color":"#cc0000"},
+        {"t":"MSFT","rel":"Customer - Azure networking","color":"#00a4ef"},
+        {"t":"GOOG","rel":"Customer - cloud networking","color":"#4285f4"},
+    ],
+    "MRVL": [
+        {"t":"NVDA","rel":"Competitor - custom AI silicon","color":"#76b900"},
+        {"t":"TSM","rel":"Foundry partner","color":"#0066b3"},
+        {"t":"AVGO","rel":"Competitor - networking","color":"#cc0000"},
+        {"t":"AMD","rel":"Competitor - data centre","color":"#ed1c24"},
+    ],
+}
+
+# Default color for unknown tickers
+def ticker_color(t):
+    colors = {"NVDA":"#76b900","AMD":"#ed1c24","TSM":"#0066b3","AVGO":"#cc0000",
+              "SMCI":"#0055a4","MRVL":"#8b1a1a","VRT":"#00263e","MSFT":"#00a4ef",
+              "ANET":"#6d9e37","DELL":"#007db8","IONQ":"#1a73e8","RGTI":"#6a0dad",
+              "QBTS":"#555","QUBT":"#444","ARQQ":"#333","IBM":"#0530ad",
+              "GOOG":"#4285f4","AAPL":"#555"}
+    return colors.get(t, "#444")
+
+@app.get("/api/lookup/{ticker}")
+async def api_lookup(ticker: str):
+    """Deep lookup for any stock or ETF."""
+    ticker = ticker.upper().strip()
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        if not info.get("shortName"):
+            return {"error": f"Ticker '{ticker}' not found"}
+
+        qt = info.get("quoteType", "")
+        is_etf = qt == "ETF" or info.get("fundFamily") is not None
+
+        cur = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose", 0)
+        prev = info.get("previousClose", 0)
+        w52h = info.get("fiftyTwoWeekHigh", 0)
+        w52l = info.get("fiftyTwoWeekLow", 0)
+        w52pct = round((cur - w52l) / (w52h - w52l) * 100, 1) if w52h != w52l else 50
+        chg = round(cur - prev, 2) if prev else 0
+        chg_pct = round(chg / prev * 100, 2) if prev else 0
+
+        # YTD from history
+        ytd = 0
+        try:
+            hist = t.history(period="ytd")
+            if len(hist) > 0:
+                ytd_start = float(hist["Close"].iloc[0])
+                ytd = round((cur - ytd_start) / ytd_start * 100, 2) if ytd_start else 0
+        except:
+            pass
+
+        # RSI from 1mo history
+        rsi = 50
+        try:
+            h1m = t.history(period="1mo")
+            if len(h1m) >= 14:
+                closes = h1m["Close"].tolist()[-15:]
+                g, l = 0, 0
+                for i in range(1, len(closes)):
+                    d = closes[i] - closes[i-1]
+                    if d > 0: g += d
+                    else: l -= d
+                rs = g / l if l > 0 else 10
+                rsi = round(100 - 100 / (1 + rs), 1)
+        except:
+            pass
+
+        # Analyst recommendations
+        recs = {"strongBuy": 0, "buy": 0, "hold": 0, "sell": 0, "strongSell": 0}
+        try:
+            r = t.recommendations
+            if r is not None and len(r) > 0:
+                latest = r.iloc[0]
+                recs = {
+                    "strongBuy": int(latest.get("strongBuy", 0)),
+                    "buy": int(latest.get("buy", 0)),
+                    "hold": int(latest.get("hold", 0)),
+                    "sell": int(latest.get("sell", 0)),
+                    "strongSell": int(latest.get("strongSell", 0)),
+                }
+        except:
+            pass
+        total_analysts = sum(recs.values())
+
+        # News
+        news = []
+        try:
+            raw_news = t.news or []
+            for n in raw_news[:6]:
+                title = n.get("title", "")
+                link = n.get("link", "")
+                publisher = n.get("publisher", "")
+                if title:
+                    news.append({"title": title, "link": link, "publisher": publisher})
+        except:
+            pass
+
+        # ETF holdings (if ETF)
+        holdings = []
+        if is_etf:
+            try:
+                fd = t.funds_data
+                th = fd.top_holdings
+                if th is not None:
+                    for sym, row in th.head(10).iterrows():
+                        holdings.append({
+                            "ticker": sym,
+                            "name": row.get("Name", sym),
+                            "weight": round(float(row.get("Holding Percent", 0)) * 100, 2),
+                        })
+            except:
+                pass
+
+        # Related stocks
+        related = []
+        if ticker in SUPPLY_CHAIN:
+            # Use hardcoded supply chain
+            for sc in SUPPLY_CHAIN[ticker]:
+                rel_data = {"ticker": sc["t"], "rel": sc["rel"], "color": sc["color"]}
+                # Fetch price for related stock
+                try:
+                    ri = yf.Ticker(sc["t"]).info or {}
+                    rc = ri.get("currentPrice") or ri.get("regularMarketPrice") or ri.get("previousClose", 0)
+                    rp = ri.get("previousClose", 0)
+                    rh = ri.get("fiftyTwoWeekHigh", 0)
+                    rl = ri.get("fiftyTwoWeekLow", 0)
+                    rel_data["price"] = round(rc, 2) if rc else 0
+                    rel_data["change"] = round(rc - rp, 2) if rp else 0
+                    rel_data["changePct"] = round((rc - rp) / rp * 100, 2) if rp else 0
+                    rel_data["w52High"] = round(rh, 2)
+                    rel_data["w52Low"] = round(rl, 2)
+                    rel_data["w52Pct"] = round((rc - rl) / (rh - rl) * 100, 1) if rh != rl else 50
+                    rel_data["name"] = ri.get("shortName", sc["t"])
+                except:
+                    rel_data["price"] = 0
+                related.append(rel_data)
+        else:
+            # Fallback: same sector/industry
+            sector = info.get("sector", "")
+            industry = info.get("industry", "")
+            if sector:
+                try:
+                    # Use our universe for matching
+                    for sec_stocks in UNIVERSE.values():
+                        for s in sec_stocks:
+                            if s["t"] != ticker:
+                                si = yf.Ticker(s["t"]).info or {}
+                                if si.get("sector") == sector or si.get("industry") == industry:
+                                    rc = si.get("currentPrice") or si.get("regularMarketPrice") or si.get("previousClose", 0)
+                                    rp = si.get("previousClose", 0)
+                                    rh = si.get("fiftyTwoWeekHigh", 0)
+                                    rl = si.get("fiftyTwoWeekLow", 0)
+                                    related.append({
+                                        "ticker": s["t"], "name": si.get("shortName", s["t"]),
+                                        "rel": f"Same {industry or sector}",
+                                        "color": ticker_color(s["t"]),
+                                        "price": round(rc, 2) if rc else 0,
+                                        "change": round(rc - rp, 2) if rp else 0,
+                                        "changePct": round((rc - rp) / rp * 100, 2) if rp else 0,
+                                        "w52High": round(rh, 2), "w52Low": round(rl, 2),
+                                        "w52Pct": round((rc - rl) / (rh - rl) * 100, 1) if rh != rl else 50,
+                                    })
+                                    if len(related) >= 6:
+                                        break
+                        if len(related) >= 6:
+                            break
+                except:
+                    pass
+
+        # ETF exposure
+        etf_exp = get_etf_exposure(ticker)
+
+        return {
+            "ticker": ticker,
+            "name": info.get("shortName", ticker),
+            "type": "ETF" if is_etf else "Stock",
+            "sector": info.get("sector", ""),
+            "industry": info.get("industry", ""),
+            "desc": (info.get("longBusinessSummary", "") or "")[:400],
+            "website": info.get("website", ""),
+            "price": {
+                "current": round(cur, 2),
+                "prevClose": round(prev, 2),
+                "change": chg,
+                "changePct": chg_pct,
+                "dayHigh": round(info.get("dayHigh", 0) or 0, 2),
+                "dayLow": round(info.get("dayLow", 0) or 0, 2),
+                "w52High": round(w52h, 2),
+                "w52Low": round(w52l, 2),
+                "w52Pct": w52pct,
+                "ytdPct": ytd,
+                "volume": info.get("volume", 0) or 0,
+                "avgVolume": info.get("averageVolume", 0) or 0,
+            },
+            "indicators": {
+                "marketCap": info.get("marketCap", 0) or 0,
+                "peTrailing": round(info.get("trailingPE", 0) or 0, 2),
+                "peForward": round(info.get("forwardPE", 0) or 0, 2),
+                "beta": round(info.get("beta", 0) or 0, 2),
+                "divYield": round((info.get("dividendYield", 0) or 0) * 100, 2),
+                "rsi": rsi,
+                "targetPrice": round(info.get("targetMeanPrice", 0) or 0, 2),
+                "recKey": info.get("recommendationKey", ""),
+            },
+            "analysts": recs,
+            "totalAnalysts": total_analysts,
+            "news": news,
+            "related": related,
+            "etfExposure": etf_exp,
+            "holdings": holdings,
+        }
+    except Exception as e:
+        logger.error(f"Lookup error for {ticker}: {e}")
+        return {"error": str(e)}
 
 # ── Portfolio ──
 PF = "portfolio.json"

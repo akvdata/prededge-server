@@ -152,7 +152,7 @@ function renderResearch(){
   var el=document.getElementById("p-res");
   if(!el)return;
   var searchHTML='<div class="sh"><div class="sh-t">Research</div><div class="sh-s">Search any stock or ETF for deep analysis</div></div>'+
-    '<div style="display:flex;gap:8px;margin-bottom:16px"><input class="inp" type="text" id="res-input" placeholder="Enter ticker... e.g. NVDA, QQQ, IONQ" style="flex:1" onkeydown="if(event.key==='Enter')doLookup()"><button class="btn btn-g" style="background:var(--or);color:#000;white-space:nowrap" onclick="doLookup()">LOOKUP</button></div>';
+    '<div style="display:flex;gap:8px;margin-bottom:16px"><input class="inp" type="text" id="res-input" placeholder="Enter ticker... e.g. NVDA, QQQ, IONQ" style="flex:1" onkeydown="if(event.keyCode===13)doLookup()"><button class="btn btn-g" style="background:var(--or);color:#000;white-space:nowrap" onclick="doLookup()">LOOKUP</button></div>';
 
   if(researchLoading){
     el.innerHTML=searchHTML+'<div style="padding:40px;text-align:center;color:var(--or)"><div class="mn" style="font-size:14px;margin-bottom:8px">Fetching data...</div><div style="font-size:11px;color:var(--tx3)">This may take 10-15 seconds for related stocks</div></div>';
